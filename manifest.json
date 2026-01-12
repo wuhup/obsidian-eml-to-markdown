@@ -1,0 +1,10 @@
+{
+	"id": "eml-to-markdown",
+	"name": "EML to Markdown",
+	"version": "1.0.0",
+	"minAppVersion": "1.0.0",
+	"description": "Convert .eml email files to Markdown notes with extracted headers and attachments.",
+	"author": "Christopher Jones",
+	"authorUrl": "",
+	"isDesktopOnly": true
+}
