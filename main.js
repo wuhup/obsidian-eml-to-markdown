@@ -76,8 +76,9 @@ function parseEmailAddresses(str) {
 function decodeMimeWord(str) {
   return str.replace(/=\?([^?]+)\?([BQ])\?([^?]+)\?=/gi, (match, charset, encoding, text) => {
     try {
+      const nodeCharset = normalizeCharset(charset);
       if (encoding.toUpperCase() === "B") {
-        return Buffer.from(text, "base64").toString("utf-8");
+        return Buffer.from(text, "base64").toString(nodeCharset);
       } else if (encoding.toUpperCase() === "Q") {
         const withSpaces = text.replace(/_/g, " ");
         const bytes = [];
@@ -94,7 +95,7 @@ function decodeMimeWord(str) {
           bytes.push(withSpaces.charCodeAt(i));
           i++;
         }
-        return Buffer.from(bytes).toString("utf-8");
+        return Buffer.from(bytes).toString(nodeCharset);
       }
     } catch (e) {
     }
@@ -119,17 +120,17 @@ function decodeQuotedPrintableToBuffer(str) {
   }
   return Buffer.from(bytes);
 }
-function decodeQuotedPrintable(str) {
+function decodeQuotedPrintable(str, charset = "utf-8") {
   const buffer = decodeQuotedPrintableToBuffer(str);
   try {
-    return buffer.toString("utf-8");
+    return buffer.toString(charset);
   } catch (e) {
     return str.replace(/=\r?\n/g, "");
   }
 }
-function decodeBase64(str) {
+function decodeBase64(str, charset = "utf-8") {
   try {
-    return Buffer.from(str.replace(/\s/g, ""), "base64").toString("utf-8");
+    return Buffer.from(str.replace(/\s/g, ""), "base64").toString(charset);
   } catch (e) {
     return str;
   }
@@ -159,6 +160,21 @@ function getContentType(headers) {
   const ct = headers.get("content-type") || "text/plain";
   return ct.split(";")[0].trim().toLowerCase();
 }
+function normalizeCharset(charset) {
+  const lower = charset.toLowerCase().replace(/[^a-z0-9]/g, "");
+  if (lower === "iso88591" || lower === "latin1" || lower === "windows1252" || lower === "cp1252" || lower === "iso885915") {
+    return "latin1";
+  }
+  if (lower === "usascii" || lower === "ascii") {
+    return "ascii";
+  }
+  return "utf-8";
+}
+function getCharset(headers) {
+  const ct = headers.get("content-type") || "";
+  const match = ct.match(/charset\s*=\s*"?([^";]+)"?/i);
+  return match ? normalizeCharset(match[1]) : "utf-8";
+}
 function getFilename(headers) {
   const disposition = headers.get("content-disposition") || "";
   const contentType = headers.get("content-type") || "";
@@ -172,12 +188,12 @@ function getFilename(headers) {
   }
   return null;
 }
-function decodeContent(content, encoding) {
+function decodeContent(content, encoding, charset = "utf-8") {
   switch (encoding) {
     case "base64":
-      return decodeBase64(content);
+      return decodeBase64(content, charset);
     case "quoted-printable":
-      return decodeQuotedPrintable(content);
+      return decodeQuotedPrintable(content, charset);
     default:
       return content;
   }
@@ -203,6 +219,7 @@ function parseMimePart(partText, result, isTopLevel = false) {
   const headers = parseHeaders(headerText);
   const contentType = getContentType(headers);
   const encoding = getEncoding(headers);
+  const charset = getCharset(headers);
   if (contentType.startsWith("multipart/")) {
     const boundary = extractBoundary(headers.get("content-type") || "");
     if (boundary) {
@@ -217,14 +234,14 @@ function parseMimePart(partText, result, isTopLevel = false) {
     return;
   }
   if (contentType === "text/plain") {
-    const decoded = decodeContent(bodyText, encoding);
+    const decoded = decodeContent(bodyText, encoding, charset);
     if (!result.textBody) {
       result.textBody = decoded;
     }
     return;
   }
   if (contentType === "text/html") {
-    const decoded = decodeContent(bodyText, encoding);
+    const decoded = decodeContent(bodyText, encoding, charset);
     if (!result.htmlBody) {
       result.htmlBody = decoded;
     }
@@ -302,6 +319,7 @@ function parseEml(content) {
   }
   const contentType = getContentType(headers);
   const encoding = getEncoding(headers);
+  const charset = getCharset(headers);
   if (contentType.startsWith("multipart/")) {
     const boundary = extractBoundary(headers.get("content-type") || "");
     if (boundary) {
@@ -314,9 +332,9 @@ function parseEml(content) {
       }
     }
   } else if (contentType === "text/plain") {
-    result.textBody = decodeContent(bodyText, encoding);
+    result.textBody = decodeContent(bodyText, encoding, charset);
   } else if (contentType === "text/html") {
-    result.htmlBody = decodeContent(bodyText, encoding);
+    result.htmlBody = decodeContent(bodyText, encoding, charset);
   }
   return result;
 }

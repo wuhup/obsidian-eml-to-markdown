@@ -91,12 +91,12 @@ function parseEmailAddresses(str: string): EmailAddress[] {
 function decodeMimeWord(str: string): string {
 	return str.replace(/=\?([^?]+)\?([BQ])\?([^?]+)\?=/gi, (match, charset, encoding, text) => {
 		try {
+			const nodeCharset = normalizeCharset(charset);
 			if (encoding.toUpperCase() === 'B') {
 				// Base64
-				return Buffer.from(text, 'base64').toString('utf-8');
+				return Buffer.from(text, 'base64').toString(nodeCharset);
 			} else if (encoding.toUpperCase() === 'Q') {
 				// Q-encoding: underscores are spaces, =XX are hex bytes
-				// Need to decode as UTF-8 bytes, not individual chars
 				const withSpaces = text.replace(/_/g, ' ');
 				const bytes: number[] = [];
 				let i = 0;
@@ -112,7 +112,7 @@ function decodeMimeWord(str: string): string {
 					bytes.push(withSpaces.charCodeAt(i));
 					i++;
 				}
-				return Buffer.from(bytes).toString('utf-8');
+				return Buffer.from(bytes).toString(nodeCharset);
 			}
 		} catch (e) {
 			// Return original on error
@@ -148,13 +148,12 @@ function decodeQuotedPrintableToBuffer(str: string): Buffer {
 }
 
 /**
- * Decode quoted-printable content to UTF-8 string (for text content)
+ * Decode quoted-printable content to string using specified charset
  */
-function decodeQuotedPrintable(str: string): string {
+function decodeQuotedPrintable(str: string, charset: BufferEncoding = 'utf-8'): string {
 	const buffer = decodeQuotedPrintableToBuffer(str);
-	// Decode bytes as UTF-8
 	try {
-		return buffer.toString('utf-8');
+		return buffer.toString(charset);
 	} catch (e) {
 		// Fallback: return as-is if decoding fails
 		return str.replace(/=\r?\n/g, '');
@@ -162,11 +161,11 @@ function decodeQuotedPrintable(str: string): string {
 }
 
 /**
- * Decode base64 content
+ * Decode base64 content using specified charset
  */
-function decodeBase64(str: string): string {
+function decodeBase64(str: string, charset: BufferEncoding = 'utf-8'): string {
 	try {
-		return Buffer.from(str.replace(/\s/g, ''), 'base64').toString('utf-8');
+		return Buffer.from(str.replace(/\s/g, ''), 'base64').toString(charset);
 	} catch (e) {
 		return str;
 	}
@@ -219,12 +218,30 @@ function getContentType(headers: Map<string, string>): string {
 }
 
 /**
+ * Normalize charset name to Node.js BufferEncoding
+ * Node's Buffer only supports: utf-8, latin1, ascii, hex, base64, etc.
+ */
+function normalizeCharset(charset: string): BufferEncoding {
+	const lower = charset.toLowerCase().replace(/[^a-z0-9]/g, '');
+	// Map common email charsets to Node.js equivalents
+	if (lower === 'iso88591' || lower === 'latin1' || lower === 'windows1252' ||
+		lower === 'cp1252' || lower === 'iso885915') {
+		return 'latin1';
+	}
+	if (lower === 'usascii' || lower === 'ascii') {
+		return 'ascii';
+	}
+	// Default to utf-8 for utf8, utf-8, and unknown charsets
+	return 'utf-8';
+}
+
+/**
  * Get charset from content-type
  */
-function getCharset(headers: Map<string, string>): string {
+function getCharset(headers: Map<string, string>): BufferEncoding {
 	const ct = headers.get('content-type') || '';
 	const match = ct.match(/charset\s*=\s*"?([^";]+)"?/i);
-	return match ? match[1].toLowerCase() : 'utf-8';
+	return match ? normalizeCharset(match[1]) : 'utf-8';
 }
 
 /**
@@ -250,14 +267,14 @@ function getFilename(headers: Map<string, string>): string | null {
 }
 
 /**
- * Decode content based on transfer encoding
+ * Decode content based on transfer encoding and charset
  */
-function decodeContent(content: string, encoding: string): string {
+function decodeContent(content: string, encoding: string, charset: BufferEncoding = 'utf-8'): string {
 	switch (encoding) {
 		case 'base64':
-			return decodeBase64(content);
+			return decodeBase64(content, charset);
 		case 'quoted-printable':
-			return decodeQuotedPrintable(content);
+			return decodeQuotedPrintable(content, charset);
 		default:
 			return content;
 	}
@@ -298,6 +315,7 @@ function parseMimePart(
 	const headers = parseHeaders(headerText);
 	const contentType = getContentType(headers);
 	const encoding = getEncoding(headers);
+	const charset = getCharset(headers);
 
 	// Check if multipart
 	if (contentType.startsWith('multipart/')) {
@@ -317,7 +335,7 @@ function parseMimePart(
 
 	// Handle text content
 	if (contentType === 'text/plain') {
-		const decoded = decodeContent(bodyText, encoding);
+		const decoded = decodeContent(bodyText, encoding, charset);
 		if (!result.textBody) {
 			result.textBody = decoded;
 		}
@@ -325,7 +343,7 @@ function parseMimePart(
 	}
 
 	if (contentType === 'text/html') {
-		const decoded = decodeContent(bodyText, encoding);
+		const decoded = decodeContent(bodyText, encoding, charset);
 		if (!result.htmlBody) {
 			result.htmlBody = decoded;
 		}
@@ -536,6 +554,7 @@ export function parseEml(content: string): ParsedEmail {
 	// Parse body
 	const contentType = getContentType(headers);
 	const encoding = getEncoding(headers);
+	const charset = getCharset(headers);
 
 	if (contentType.startsWith('multipart/')) {
 		const boundary = extractBoundary(headers.get('content-type') || '');
@@ -549,9 +568,9 @@ export function parseEml(content: string): ParsedEmail {
 			}
 		}
 	} else if (contentType === 'text/plain') {
-		result.textBody = decodeContent(bodyText, encoding);
+		result.textBody = decodeContent(bodyText, encoding, charset);
 	} else if (contentType === 'text/html') {
-		result.htmlBody = decodeContent(bodyText, encoding);
+		result.htmlBody = decodeContent(bodyText, encoding, charset);
 	}
 
 	return result;
